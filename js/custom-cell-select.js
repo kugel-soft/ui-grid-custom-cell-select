@@ -2,7 +2,7 @@
 // Created by brendenjpeterson@gmail.com
 
 angular.module('ui.grid')
-.directive('uiGridCustomCellSelect', ['$timeout', '$document', '$filter', 'rowSearcher', 'uiGridConstants', function ($timeout, $document, $filter, rowSearcher, uiGridConstants) {
+.directive('uiGridCustomCellSelect', ['$timeout', '$document', '$filter', 'rowSearcher', 'uiGridConstants', '$parse', function ($timeout, $document, $filter, rowSearcher, uiGridConstants, $parse) {
     return {
         replace: true,
         require: '^uiGrid',
@@ -137,14 +137,19 @@ angular.module('ui.grid')
                                         var column = columns[j];
                                         if (column.uid === col) {
                                             var pastedRows = pastedData.split('\n');
-                                            for (var k = 0; k < pastedRows.length - 1; k++) {
+                                            for (var k = 0; k < pastedRows.length; k++) {
                                                 var pastedRow = pastedRows[k];
                                                 if (i + k < visibleRows.length) {
                                                     var pastedCells = pastedRow.split('\t');
                                                     for (var l = 0; l < pastedCells.length; l++) {
                                                         var pastedCell = pastedCells[l];
                                                         if (j + l < columns.length) {
-                                                            visibleRows[i + k].entity[columns[j + l].field] = pastedCell;
+                                                            var column = columns[j + l]; 
+                                                            var atrib = columns[j + l].field;
+                                                            var getter = $parse(atrib);
+                                                            var setter = getter.assign;
+                                                            var value = (column.colDef.type == 'number') ? parseFloat(pastedCell.split('.').join('').split(',').join('.')) : pastedCell;
+                                                            setter(visibleRows[i + k].entity, value);
                                                             grid.api.core.refresh();
                                                         }
                                                     }
