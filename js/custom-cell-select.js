@@ -192,7 +192,6 @@ angular.module('ui.grid')
                         }
 
                         if (cbData && angular.element(document.activeElement).parents('.ui-grid').length > 0 && (window.getSelection() + '' === '' || window.getSelection() + '' === ' ' || window.getSelection() == HIDDEN_INPUT_VALUE) && grid.cellNav.focusedCells.length > 0) {
-                            console.log('documentCopyCells', cbData);
                             cbData.setData(cbType, createCopyData());
                             evt.preventDefault();
                         }
@@ -200,8 +199,6 @@ angular.module('ui.grid')
 
                     function pasteCellData(evt) {
                         var clipboardData = evt.originalEvent.clipboardData || window.clipboardData;
-
-                        console.log('pasteCellData', clipboardData);
 
                         if (!clipboardData) {
                             console.log('Clipboard API not supported in browser');
