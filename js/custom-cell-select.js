@@ -1,8 +1,11 @@
-﻿// Custom multi-cell selection directive for UI-Grid
+// Custom multi-cell selection directive for UI-Grid
 // Created by brendenjpeterson@gmail.com
 
 angular.module('ui.grid')
-.directive('uiGridCustomCellSelect', ['$timeout', '$document', '$filter', 'rowSearcher', 'uiGridConstants', '$parse', function ($timeout, $document, $filter, rowSearcher, uiGridConstants, $parse) {
+.directive('uiGridCustomCellSelect', ['$timeout', '$document', '$filter', 'rowSearcher', 'uiGridConstants', '$parse', 'uiGridCellNavConstants', '$window', function ($timeout, $document, $filter, rowSearcher, uiGridConstants, $parse, uiGridCellNavConstants, $window) {
+    var DIRECTIONS = { UP: 'UP', DOWN: 'DOWN', LEFT: 'LEFT', RIGHT: 'RIGHT' };
+    var HIDDEN_INPUT_VALUE = '##HIDDEN_INPUT_VALUE##';
+
     return {
         replace: true,
         require: '^uiGrid',
@@ -18,11 +21,11 @@ angular.module('ui.grid')
 
                     // Data setup
                     _scope.ugCustomSelect = {
-                        hiddenInput: angular.element('<input class="ui-grid-custom-selection-input" type="text" />').appendTo('body'),
+                        hiddenInput: angular.element('<input style="height: 0px; width: 0px; position: absolute; top: 0; z-index: -1;" type="text" value="' + HIDDEN_INPUT_VALUE + '" />').appendTo($elm),
                         isDragging: false,
+                        lastMouseMoveEvt: null,
+                        dragDirection: {},
                         selectedCells: [],
-                        cellMap: {},
-                        copyData: '',
                         dragData: {
                             startCell: {
                                 row: null,
@@ -39,44 +42,131 @@ angular.module('ui.grid')
                     $timeout(function () {
                         grid.element.on('mousedown', '.ui-grid-cell-contents', dragStart);
                         grid.element.on('mouseenter', '.ui-grid-cell-contents', mouseEnterCell);
+                        grid.element.on('mousemove', '.ui-grid-cell-contents', mouseMoveCell);
                         angular.element('body').on('mouseup', bodyMouseUp);
                         angular.element(document).on('keydown', documentKeyUp);
                         angular.element(document).on('copy', documentCopyCells);
-                        grid.api.core.on.scrollBegin(_scope, gridScrollBegin);
-                        grid.api.core.on.scrollEnd(_scope, gridScrollEnd);
 
                         grid.api.core.on.filterChanged(_scope, clearDragData);
                         grid.api.core.on.columnVisibilityChanged(_scope, clearDragData);
                         grid.api.core.on.rowsVisibleChanged(_scope, clearDragData);
                         grid.api.core.on.sortChanged(_scope, clearDragData);
 
-                        _scope.ugCustomSelect.hiddenInput.on('paste', pasteCellData);
+                        angular.element(document).on('paste', pasteCellData);
                     });
 
                     // Events
                     function dragStart(evt) {
                         if (angular.element(evt.target).hasClass('ui-grid-cell-contents')) {
-                            var cellData = $(this).data().$scope;
-                            clearDragData();
-                            _scope.ugCustomSelect.isDragging = true;
-                            setStartCell(cellData.row, cellData.col);
-                            setSelectedStates();
+                            if (evt.button == 0) {
+                                var cellData = $(this).data().$scope;
+                                clearDragData();
+                                _scope.ugCustomSelect.isDragging = true;
+                                _scope.ugCustomSelect.lastMouseMoveEvt = evt;
+                                setStartCell(cellData.row, cellData.col);
+                                setSelectedStates();
+                            } else if (evt.button == 2) {
+                                evt.target.contentEditable = true;
+
+                                var hiddenInput = _scope.ugCustomSelect.hiddenInput[0];
+                                hiddenInput.value = HIDDEN_INPUT_VALUE;
+                                hiddenInput.select();
+
+                                setTimeout(function() {
+                                    evt.target.contentEditable = false;
+                                }, 500);
+                            }
                         }
                     }
 
                     function mouseEnterCell(evt) {
                         if (_scope.ugCustomSelect.isDragging) {
                             var cellData = $(this).data().$scope;
-                            setEndCell(cellData.row, cellData.col);
-                            setSelectedStates();
+                            if (cellData) {
+                                setEndCell(cellData.row, cellData.col);
+                                setSelectedStates();
+                            }
+                        }
+                    }
+
+                    function mouseMoveCell(evt) {
+                        if (_scope.ugCustomSelect.isDragging && _scope.ugCustomSelect.lastMouseMoveEvt) {
+                            if (_scope.ugCustomSelect.lastMouseMoveEvt) {
+                                var lastEvt = _scope.ugCustomSelect.lastMouseMoveEvt;
+                                _scope.ugCustomSelect.dragDirection.horizontal = '';
+                                _scope.ugCustomSelect.dragDirection.vertical = '';
+
+                                if (Math.abs(lastEvt.pageX - evt.pageX) >= 10) {
+                                    if (lastEvt.pageX < evt.pageX) {
+                                        _scope.ugCustomSelect.dragDirection.horizontal = DIRECTIONS.RIGHT;
+                                    } else if (lastEvt.pageX > evt.pageX) {
+                                        _scope.ugCustomSelect.dragDirection.horizontal = DIRECTIONS.LEFT;
+                                    }
+                                }
+
+                                if (Math.abs(lastEvt.pageY - evt.pageY) >= 10) {
+                                    if (lastEvt.pageY < evt.pageY) {
+                                        _scope.ugCustomSelect.dragDirection.vertical = DIRECTIONS.DOWN;
+                                    } else if (lastEvt.pageY > evt.pageY) {
+                                        _scope.ugCustomSelect.dragDirection.vertical = DIRECTIONS.UP;
+                                    }
+                                }
+
+                                if (_scope.ugCustomSelect.dragDirection.horizontal || _scope.ugCustomSelect.dragDirection.vertical) {
+                                    var cellData = $(this).data().$scope;
+                                    if (cellData) {
+                                        var nextCell = getNextPossibleDragCell(cellData, evt);
+                                        grid.api.core.scrollToIfNecessary(nextCell.row, nextCell.col);
+                                    }
+
+                                    _scope.ugCustomSelect.lastMouseMoveEvt = evt;
+                                }
+                            }
                         }
                     }
 
                     function bodyMouseUp(evt) {
                         if (_scope.ugCustomSelect.isDragging) {
                             _scope.ugCustomSelect.isDragging = false;
+                            _scope.ugCustomSelect.lastMouseMoveEvt = null;
+                            _scope.ugCustomSelect.dragDirection = {};
                             setSelectedStates();
                         }
+                    }
+
+                    function getNextPossibleDragCell(cell, evt) {
+                        var nextCell = { row: cell.row, col: cell.col };
+
+                        if (_scope.ugCustomSelect.dragDirection.horizontal) {
+                            var focusableCols = grid.renderContainers.body.cellNav.getFocusableCols();
+                            var curColIndex = focusableCols.indexOf(cell.col);
+
+                            if (_scope.ugCustomSelect.dragDirection.horizontal == DIRECTIONS.RIGHT) {
+                                if (curColIndex < focusableCols.length - 1) {
+                                    nextCell.col = focusableCols[curColIndex + 1];
+                                }
+                            } else {
+                                if (curColIndex > 0) {
+                                    nextCell.col = focusableCols[curColIndex - 1];
+                                }
+                            }
+                        }
+
+                        if (_scope.ugCustomSelect.dragDirection.horizontal) {
+                            var focusableRows = grid.renderContainers.body.cellNav.getFocusableRows();
+                            var curRowIndex = focusableRows.indexOf(cell.row);
+
+                            if (_scope.ugCustomSelect.dragDirection.horizontal == DIRECTIONS.DOWN) {
+                                if (curRowIndex < focusableRows.length - 1) {
+                                    nextCell.row = focusableRows[curRowIndex + 1];
+                                }
+                            } else {
+                                if (curRowIndex > 0) {
+                                    nextCell.row = focusableRows[curRowIndex - 1];
+                                }
+                            }
+                        }
+                        return nextCell;
                     }
 
                     function documentKeyUp(evt) {
@@ -84,14 +174,8 @@ angular.module('ui.grid')
 
                         // When ctrl+C or cmd+C
                         if (evt.keyCode === cKey && (evt.ctrlKey || evt.metaKey) && window.getSelection() + '' === '') {
-                            _scope.ugCustomSelect.hiddenInput.val(' ').focus().select();
                             document.execCommand('copy');
                             evt.preventDefault();
-                        }
-
-                        // When ctrl+V or cmd+V
-                        if (evt.keyCode === vKey && (evt.ctrlKey || evt.metaKey) && window.getSelection() + '' === '') {
-                            _scope.ugCustomSelect.hiddenInput.val('').focus();
                         }
                     }
 
@@ -107,14 +191,17 @@ angular.module('ui.grid')
                             cbType = 'Text';
                         }
 
-                        if (cbData && (window.getSelection() + '' === '' || window.getSelection() + '' === ' ') && _scope.ugCustomSelect.copyData !== '') {
-                            cbData.setData(cbType, _scope.ugCustomSelect.copyData);
+                        if (cbData && angular.element(document.activeElement).parents('.ui-grid').length > 0 && (window.getSelection() + '' === '' || window.getSelection() + '' === ' ' || window.getSelection() == HIDDEN_INPUT_VALUE) && grid.cellNav.focusedCells.length > 0) {
+                            console.log('documentCopyCells', cbData);
+                            cbData.setData(cbType, createCopyData());
                             evt.preventDefault();
                         }
                     }
 
                     function pasteCellData(evt) {
                         var clipboardData = evt.originalEvent.clipboardData || window.clipboardData;
+
+                        console.log('pasteCellData', clipboardData);
 
                         if (!clipboardData) {
                             console.log('Clipboard API not supported in browser');
@@ -123,11 +210,10 @@ angular.module('ui.grid')
 
                         var pastedData = clipboardData.getData('Text');
 
-                        if (Object.keys(_scope.ugCustomSelect.cellMap)[0]) {
-                            var row = Object.keys(_scope.ugCustomSelect.cellMap)[0];
-                            var col = _scope.ugCustomSelect.cellMap[
-                                Object.keys(_scope.ugCustomSelect.cellMap)[0]][0];
-
+                        var firstCell = grid.cellNav.focusedCells[0];
+                        if (firstCell) {
+                            var row = firstCell.row.uid;
+                            var col = firstCell.col.uid;
                             var visibleRows = grid.getVisibleRows();
                             var columns = grid.columns;
                             for (var i = 0; i < visibleRows.length; i++) {
@@ -137,20 +223,30 @@ angular.module('ui.grid')
                                         var column = columns[j];
                                         if (column.uid === col) {
                                             var pastedRows = pastedData.split('\n');
-                                            for (var k = 0; k < pastedRows.length; k++) {
+                                            for (var k = 0; k < pastedRows.length - 1; k++) {
                                                 var pastedRow = pastedRows[k];
                                                 if (i + k < visibleRows.length) {
                                                     var pastedCells = pastedRow.split('\t');
                                                     for (var l = 0; l < pastedCells.length; l++) {
                                                         var pastedCell = pastedCells[l];
                                                         if (j + l < columns.length) {
-                                                            var column = columns[j + l]; 
-                                                            var atrib = columns[j + l].field;
-                                                            var getter = $parse(atrib);
-                                                            var setter = getter.assign;
-                                                            var value = (column.colDef.type == 'number') ? parseFloat(pastedCell.split('.').join('').split(',').join('.')) : pastedCell;
-                                                            setter(visibleRows[i + k].entity, value);
-                                                            grid.api.core.refresh();
+                                                            var column = columns[j + l];
+                                                            if (column.colDef.enableCellEdit) {
+                                                                var atrib = columns[j + l].field;
+                                                                var getter = $parse(atrib);
+                                                                var setter = getter.assign;
+                                                                var rowEntity = visibleRows[i + k].entity;
+                                                                var oldValue = getter(rowEntity);
+
+                                                                var newValue = pastedCell;
+                                                                if (column.colDef.type == 'number') {
+                                                                    newValue = parseFloat(newValue) || 0;
+                                                                }
+                                                                setter(rowEntity, newValue);
+
+                                                                grid.api.edit.raise.afterCellEdit(rowEntity, column.colDef, newValue, oldValue);
+                                                                grid.api.core.refresh();
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -161,29 +257,6 @@ angular.module('ui.grid')
                                 }
                             }
                         }
-                    }
-
-                    function gridScrollBegin() {
-                        grid.element.addClass('ui-grid-custom-selected-scrolling');
-                    }
-
-                    function gridScrollEnd() {
-                        angular.element('.ui-grid-custom-selected').removeClass('ui-grid-custom-selected');
-                        var visibleCols = grid.renderContainers.body.renderedColumns;
-                        var visibleRows = grid.renderContainers.body.renderedRows;
-
-                        for (var ri = 0; ri < visibleRows.length; ri++) {
-                            var currentRow = visibleRows[ri];
-                            for (var ci = 0; ci < visibleCols.length; ci++) {
-                                var currentCol = visibleCols[ci];
-
-                                if (cellIsSelected(currentRow, currentCol)) {
-                                    getCellElem(currentCol, ri).find('.ui-grid-cell-contents').addClass('ui-grid-custom-selected');
-                                }
-                            }
-                        }
-
-                        grid.element.removeClass('ui-grid-custom-selected-scrolling');
                     }
 
                     // Functions
@@ -201,7 +274,6 @@ angular.module('ui.grid')
                         clearEndCell();
                         clearStartCell();
                         clearSelectedStates();
-                        _scope.ugCustomSelect.copyData = '';
                     }
 
                     function clearStartCell() {
@@ -219,28 +291,25 @@ angular.module('ui.grid')
                         clearSelectedStates();
                         var indexMap = createIndexMap(_scope.ugCustomSelect.dragData.startCell, _scope.ugCustomSelect.dragData.endCell);
                         _scope.ugCustomSelect.selectedCells = getCellsWithIndexMap(indexMap);
-                        _scope.ugCustomSelect.cellMap = _scope.ugCustomSelect.selectedCells.reduce(function (map, obj) {
-                            if (map[obj.row.uid]) {
-                                map[obj.row.uid].push(obj.col.uid);
-                            } else {
-                                map[obj.row.uid] = [obj.col.uid];
-                            }
-                            return map;
-                        }, {});
 
+                        var focusedCells = [];
+                        var lastRowCol = null;
                         for (var i = 0; i < _scope.ugCustomSelect.selectedCells.length; i++) {
                             var currentCell = _scope.ugCustomSelect.selectedCells[i];
-                            currentCell.elem.find('.ui-grid-cell-contents').addClass('ui-grid-custom-selected');
+                            focusedCells.push(uiGridCtrl.cellNav.makeRowCol(currentCell));
                         }
-
-                        _scope.ugCustomSelect.copyData = createCopyData(_scope.ugCustomSelect.selectedCells, (indexMap.col.end - indexMap.col.start) + 1);
+                        grid.cellNav.focusedCells = focusedCells;
+                        _scope.$broadcast(uiGridCellNavConstants.CELL_NAV_EVENT);
+                        if (focusedCells.length > 0) {
+                            var lastFocusedCell = focusedCells[focusedCells.length - 1];
+                            grid.api.cellNav.raise.navigate(lastFocusedCell, grid.cellNav.lastRowCol);
+                            grid.cellNav.lastRowCol = lastFocusedCell;
+                        }
                     }
 
                     // Clears selected state from any selected cells
                     function clearSelectedStates() {
-                        angular.element('.ui-grid-custom-selected').removeClass('ui-grid-custom-selected');
                         _scope.ugCustomSelect.selectedCells = [];
-                        _scope.ugCustomSelect.cellMap = {};
                     }
 
                     function createIndexMap(startCell, endCell) {
@@ -291,27 +360,21 @@ angular.module('ui.grid')
                         return cellsArray;
                     }
 
-                    function cellIsSelected(row, col) {
-                        if (row && col) {
-                            return _scope.ugCustomSelect.cellMap[row.uid] !== undefined && _scope.ugCustomSelect.cellMap[row.uid].indexOf(col.uid) > -1;
-                        }
-                        return false;
-                    }
-
                     function getCellElem(col, rowIndex) {
                         return (col && col.uid && typeof rowIndex == 'number') ? angular.element('#' + grid.id + '-' + rowIndex + '-' + col.uid + '-cell') : null;
                     }
 
-                    function createCopyData(cells, numCols) {
+                    function createCopyData() {
+                        var cells = grid.cellNav.focusedCells;
                         var copyData = '';
-
                         for (var i = 0; i < cells.length; i++) {
                             var currentCell = cells[i];
-                            var cellValue = grid.getCellDisplayValue(currentCell.row, currentCell.col);
+                            var cellValue = grid.getCellValue(currentCell.row, currentCell.col);
 
                             copyData += cellValue? cellValue : '';
 
-                            if ((i + 1) % numCols === 0 && i !== cells.length - 1) {
+                            var proxRowUid = (i < cells.length - 1) ? cells[i + 1].row.uid : '';
+                            if (!proxRowUid || proxRowUid != currentCell.row.uid) {
                                 copyData += '\n';
                             } else if (i !== cells.length - 1) {
                                 copyData += '\t';
